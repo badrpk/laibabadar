@@ -5,6 +5,7 @@ const http = require("http");
 const { URL } = require("url");
 const crypto = require("crypto");
 const pay = require("./payments");
+const auth = require("./auth");
 const PORT = process.env.PORT || 8788;
 const uid = (p) => `${p}_${crypto.randomBytes(4).toString("hex")}`;
 const iso = () => new Date().toISOString();
@@ -34,12 +35,23 @@ function body(req) {
 http.createServer(async (req, res) => {
   const u = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const p = u.pathname.replace(/\/$/, "") || "/";
+  // AUTH_ROUTER_V1
+  if (typeof p === "string" && (p === "/auth" || p.startsWith("/auth/"))) {
+    let bodyObj = {};
+    if (req.method === "POST" || req.method === "PUT" || req.method === "PATCH") {
+      bodyObj = await new Promise((resolve) => {
+        let d = ""; req.on("data", c => d += c); req.on("end", () => { try { resolve(JSON.parse(d || "{}")); } catch { resolve({}); } });
+      });
+    }
+    const result = await auth.handleAuth(req.method, p, bodyObj, req.headers, "laibabadar");
+    return json(res, result.status, result.body);
+  }
   if (req.method === "GET" && (p === "/" || p === "/health")) {
     return json(res, 200, { ok: true, service: "laibabadar", version: "3.0.0", brand: "Laiba Badar",
       gaps_closed: ["reservations", "gift_cards", "scheduled_delivery", "multi_rail_pay", "undercut"] });
   }
   if (p === "/capabilities") return json(res, 200, { ok: true, competitor: "Foodpanda restaurant",
-    features: ["menu","zones","cart","checkout","tracking","loyalty","reservations","gift_cards","scheduled","stripe","jazzcash"] });
+    features: ["menu","zones","cart","checkout","tracking","loyalty","reservations","gift_cards","scheduled","stripe", "signup", "login", "otp", "oauth_google", "oauth_facebook","jazzcash"] });
   if (p === "/pricing") return json(res, 200, { ok: true, ...pay.pricing("laibabadar") });
   if (p === "/payments/rails") return json(res, 200, { ok: true, rails: pay.RAILS });
   if (p === "/gap-analysis") return json(res, 200, { ok: true, added: ["table reservation free", "gift cards", "scheduled delivery", "stripe+PK rails"] });
