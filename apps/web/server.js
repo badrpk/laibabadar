@@ -1,29 +1,27 @@
 /**
- * Laiba Badar brand restaurant + delivery API
- * Parity target: Foodpanda restaurant storefront / brand apps (single kitchen)
+ * Laiba Badar v3 — restaurant parity + payments + undercut
  */
 const http = require("http");
 const { URL } = require("url");
 const crypto = require("crypto");
+const pay = require("./payments");
 const PORT = process.env.PORT || 8788;
 const uid = (p) => `${p}_${crypto.randomBytes(4).toString("hex")}`;
 const iso = () => new Date().toISOString();
 
 const MENU = [
-  { id: "m1", name: "Chicken Karahi", category: "mains", price_pkr: 1450, prep_min: 30, popular: true },
-  { id: "m2", name: "Mutton Handi", category: "mains", price_pkr: 2100, prep_min: 40, popular: true },
-  { id: "m3", name: "Garlic Naan", category: "bread", price_pkr: 80, prep_min: 8, popular: false },
-  { id: "m4", name: "Gulab Jamun", category: "dessert", price_pkr: 250, prep_min: 5, popular: true },
-  { id: "m5", name: "Fresh Lime", category: "drinks", price_pkr: 120, prep_min: 3, popular: false },
+  { id: "m1", name: "Chicken Karahi", category: "mains", price_pkr: 1199, competitor_price_pkr: 1600, prep_min: 30, popular: true },
+  { id: "m2", name: "Mutton Handi", category: "mains", price_pkr: 1799, competitor_price_pkr: 2400, prep_min: 40, popular: true },
+  { id: "m3", name: "Garlic Naan", category: "bread", price_pkr: 60, competitor_price_pkr: 90, prep_min: 8, popular: false },
+  { id: "m4", name: "Gulab Jamun", category: "dessert", price_pkr: 180, competitor_price_pkr: 280, prep_min: 5, popular: true },
+  { id: "m5", name: "Fresh Lime", category: "drinks", price_pkr: 90, competitor_price_pkr: 140, prep_min: 3, popular: false },
 ];
 const ZONES = [
-  { id: "z1", name: "DHA", fee_pkr: 100, eta_min: 35 },
-  { id: "z2", name: "Gulberg", fee_pkr: 120, eta_min: 40 },
-  { id: "z3", name: "Johar Town", fee_pkr: 150, eta_min: 50 },
+  { id: "z1", name: "DHA", fee_pkr: 50, eta_min: 35 },
+  { id: "z2", name: "Gulberg", fee_pkr: 50, eta_min: 40 },
+  { id: "z3", name: "Johar Town", fee_pkr: 60, eta_min: 50 },
 ];
-const carts = {};
-const orders = {};
-const loyalty = {}; // user -> points
+const carts = {}, orders = {}, loyalty = {}, reservations = {}, giftCards = {};
 
 function json(res, code, obj) {
   res.writeHead(code, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
@@ -37,31 +35,26 @@ http.createServer(async (req, res) => {
   const u = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const p = u.pathname.replace(/\/$/, "") || "/";
   if (req.method === "GET" && (p === "/" || p === "/health")) {
-    return json(res, 200, { ok: true, service: "laibabadar", version: "2.0.0", brand: "Laiba Badar",
-      parity_target: "Foodpanda single-restaurant / brand delivery apps",
-      site: "https://laibabadar.com" });
+    return json(res, 200, { ok: true, service: "laibabadar", version: "3.0.0", brand: "Laiba Badar",
+      gaps_closed: ["reservations", "gift_cards", "scheduled_delivery", "multi_rail_pay", "undercut"] });
   }
-  if (p === "/capabilities") return json(res, 200, { ok: true, competitor: "Foodpanda restaurant storefront",
-    features: ["menu", "modifiers", "delivery_zones", "cart", "checkout", "order_tracking", "loyalty"] });
+  if (p === "/capabilities") return json(res, 200, { ok: true, competitor: "Foodpanda restaurant",
+    features: ["menu","zones","cart","checkout","tracking","loyalty","reservations","gift_cards","scheduled","stripe","jazzcash"] });
+  if (p === "/pricing") return json(res, 200, { ok: true, ...pay.pricing("laibabadar") });
+  if (p === "/payments/rails") return json(res, 200, { ok: true, rails: pay.RAILS });
+  if (p === "/gap-analysis") return json(res, 200, { ok: true, added: ["table reservation free", "gift cards", "scheduled delivery", "stripe+PK rails"] });
   if (p === "/menu") {
     const cat = u.searchParams.get("category");
-    let rows = MENU;
-    if (cat) rows = rows.filter(m => m.category === cat);
-    return json(res, 200, { ok: true, menu: rows });
+    let rows = MENU; if (cat) rows = rows.filter(m => m.category === cat);
+    return json(res, 200, { ok: true, menu: rows.map(m => ({...m, save_pkr: m.competitor_price_pkr - m.price_pkr})) });
   }
-  if (p === "/zones") return json(res, 200, { ok: true, zones: ZONES });
-  if (p === "/cart") {
-    const user = u.searchParams.get("user") || "guest";
-    return json(res, 200, { ok: true, items: carts[user] || [] });
-  }
-  if (p === "/loyalty") {
-    const user = u.searchParams.get("user") || "guest";
-    return json(res, 200, { ok: true, user, points: loyalty[user] || 0 });
-  }
+  if (p === "/zones") return json(res, 200, { ok: true, zones: ZONES, note: "Delivery fees undercut Foodpanda (~Rs50 vs ~120)" });
+  if (p === "/cart") return json(res, 200, { ok: true, items: carts[u.searchParams.get("user") || "guest"] || [] });
+  if (p === "/loyalty") return json(res, 200, { ok: true, points: loyalty[u.searchParams.get("user") || "guest"] || 0 });
+  if (p === "/reservations") return json(res, 200, { ok: true, reservations: Object.values(reservations) });
   if (p === "/orders") {
-    const user = u.searchParams.get("user");
     let rows = Object.values(orders);
-    if (user) rows = rows.filter(o => o.user === user);
+    const user = u.searchParams.get("user"); if (user) rows = rows.filter(o => o.user === user);
     return json(res, 200, { ok: true, orders: rows });
   }
   if (p.startsWith("/orders/")) {
@@ -77,6 +70,20 @@ http.createServer(async (req, res) => {
     carts[user].push({ item_id: item.id, name: item.name, qty: b.qty || 1, unit_price: item.price_pkr, note: b.note || "" });
     return json(res, 200, { ok: true, cart: carts[user] });
   }
+  if (req.method === "POST" && p === "/reservations") {
+    const b = await body(req);
+    const id = uid("res");
+    reservations[id] = { id, name: b.name, party_size: b.party_size || 2, at: b.at, phone: b.phone, fee_pkr: 0, status: "held", created: iso() };
+    return json(res, 201, { ok: true, reservation: reservations[id], note: "Free hold vs competitors charging deposits" });
+  }
+  if (req.method === "POST" && p === "/gift-cards") {
+    const b = await body(req);
+    const amount = Number(b.amount_pkr) || 1000;
+    const inv = await pay.createInvoice({ product: "laibabadar", amount, currency: "PKR", method: b.payment_method || "stripe", customer: b.user || "guest", description: "Gift card" });
+    const id = uid("gc");
+    giftCards[id] = { id, amount_pkr: amount, balance_pkr: amount, invoice: inv, code: id.slice(-8).toUpperCase() };
+    return json(res, 201, { ok: true, gift_card: giftCards[id] });
+  }
   if (req.method === "POST" && (p === "/checkout" || p === "/order")) {
     const b = await body(req);
     const user = b.user || "guest";
@@ -85,35 +92,30 @@ http.createServer(async (req, res) => {
     const zone = ZONES.find(z => z.id === b.zone_id) || ZONES[0];
     const sub = items.reduce((s, i) => s + i.unit_price * i.qty, 0);
     const total = sub + zone.fee_pkr;
+    const method = b.payment_method || "cod";
+    const inv = await pay.createInvoice({ product: "laibabadar", amount: total, currency: "PKR", method, customer: user, description: "Laiba Badar order" });
     const id = uid("lb");
     const order = {
       id, user, items, zone, subtotal_pkr: sub, delivery_fee_pkr: zone.fee_pkr, total_pkr: total,
-      payment_method: b.payment_method || "cod", address: b.address || "", phone: b.phone || "",
-      status: "placed", eta_min: zone.eta_min, timeline: [{ status: "placed", at: iso() }], created_at: iso(),
+      payment_method: method, invoice_id: inv.id, payment: inv, address: b.address || "", phone: b.phone || "",
+      status: "placed", eta_min: zone.eta_min, scheduled_for: b.scheduled_for || null,
+      timeline: [{ status: "placed", at: iso() }], created_at: iso(),
     };
-    orders[id] = order;
-    carts[user] = [];
-    loyalty[user] = (loyalty[user] || 0) + Math.floor(total / 100);
+    orders[id] = order; carts[user] = [];
+    loyalty[user] = (loyalty[user] || 0) + Math.floor(total / 80);
     return json(res, 201, { ok: true, order, loyalty_points: loyalty[user] });
   }
   if (req.method === "POST" && p.startsWith("/orders/") && p.endsWith("/advance")) {
-    const id = p.split("/")[2];
-    const o = orders[id];
-    if (!o) return json(res, 404, { ok: false });
-    const seq = ["placed", "confirmed", "cooking", "out_for_delivery", "delivered"];
+    const o = orders[p.split("/")[2]]; if (!o) return json(res, 404, { ok: false });
+    const seq = ["placed","confirmed","cooking","out_for_delivery","delivered"];
     const i = seq.indexOf(o.status);
-    if (i >= 0 && i < seq.length - 1) {
-      o.status = seq[i + 1];
-      o.timeline.push({ status: o.status, at: iso() });
-    }
+    if (i >= 0 && i < seq.length - 1) { o.status = seq[i+1]; o.timeline.push({ status: o.status, at: iso() }); }
     return json(res, 200, { ok: true, order: o });
   }
-  // simple landing
-  if (req.method === "GET" && p === "/page") {
-    res.writeHead(200, { "Content-Type": "text/html" });
-    return res.end(`<!doctype html><html><body style="font-family:system-ui;max-width:720px;margin:2rem auto">
-      <h1>Laiba Badar 🍽️</h1><p>Brand restaurant API on :${PORT}</p>
-      <p><a href="/menu">Menu JSON</a> · <a href="/capabilities">Capabilities</a></p></body></html>`);
+  if (req.method === "POST" && p === "/payments/create") {
+    const b = await body(req);
+    const inv = await pay.createInvoice({ product: "laibabadar", amount: b.amount, currency: b.currency || "PKR", method: b.method || "stripe", sku: b.sku, customer: b.customer });
+    return json(res, 201, { ok: true, invoice: inv });
   }
-  json(res, 404, { ok: false, error: "not_found" });
-}).listen(PORT, "127.0.0.1", () => console.log(`Laiba Badar v2 http://127.0.0.1:${PORT}`));
+  json(res, 404, { ok: false });
+}).listen(PORT, "127.0.0.1", () => console.log(`Laiba Badar v3 http://127.0.0.1:${PORT}`));

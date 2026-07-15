@@ -9,3 +9,7 @@
 | Cart + checkout | COD etc. |
 | Order tracking | `POST /orders/{id}/advance` |
 | Loyalty points | `GET /loyalty?user=` |
+
+## v3
+See GAP_ANALYSIS.md — multi-rail payments + undercut pricing + gap features.
+
